@@ -41,6 +41,44 @@ detects that and says so; the discrete form avoids the question.
 `--check-only` verifies the schema contract and exits without reading data —
 cheap enough to run after every CW deploy.
 
+## Running it against a Dockerised CW
+
+CW's Postgres publishes no port — it is reachable only on the compose network —
+so both steps run inside that network. These are the exact invocations, because
+getting them wrong is quiet rather than loud.
+
+**`-e KEY=VALUE`, never bare `-e KEY`.** `docker run` forwards a bare `-e KEY`
+from the host environment; `docker compose exec` does not. With the bare form
+`grants.sql` sees no password, prints its usage note and quits — having created
+the role but set no password and applied no grants. The failure then surfaces
+later, as an authentication error from something else.
+
+```bash
+# 1. the read-only role (idempotent — safe to re-run to reset the password)
+cd /opt/coal-washery-demo
+docker compose -p coal-washery-demo --env-file .env \
+    -f deploy/demo/docker-compose.demo.yml \
+    exec -T -e CW_READER_PW=the-password \
+    db psql -U postgres -d coal_washery_demo -f - < /opt/coal-washery-extract/grants.sql
+# must end with: unexpectedly_writable / (0 rows)
+
+# 2. prove the credential before involving the extractor
+docker compose -p coal-washery-demo --env-file .env \
+    -f deploy/demo/docker-compose.demo.yml \
+    exec -T -e PGPASSWORD=the-password \
+    db psql -U cw_reader -d coal_washery_demo -c "SELECT count(*) FROM rom_inward"
+
+# 3. the snapshot, with this repo bind-mounted into the app container
+docker compose -p coal-washery-demo --env-file .env \
+    -f deploy/demo/docker-compose.demo.yml \
+    run --rm -v /opt/coal-washery-extract:/mis -e CW_READER_PW=the-password \
+    app python /mis/extract.py \
+        --host db --dbname coal_washery_demo --user cw_reader --out /mis/cw.sqlite
+```
+
+Add `--check-only` to step 3 to verify the contract without reading data — cheap
+enough to run after every CW deploy.
+
 ## What it does, and deliberately does not
 
 **Full snapshots, not incremental sync.** No CW table carries `updated_at`, and

@@ -1,0 +1,4 @@
+venv/
+cw.sqlite
+*.sqlite
+__pycache__/

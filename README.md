@@ -1,0 +1,95 @@
+# Coal Washery — extractor
+
+Snapshots Coal Washery into a store the reporting products read.
+
+CW is not modified and does not know this exists. See
+`coal-washery-erp/docs/API_STRATEGY.md` for why this shape was chosen over an
+export API inside CW.
+
+```
+   Coal Washery Postgres  --(read-only role)-->  extract.py  -->  cw.sqlite
+                                                                      |
+                                    consolidated MIS / AI review / trading
+```
+
+**Only this repository knows CW's schema.** Products read `cw.sqlite` and never
+connect to CW. That is the whole design: CW has taken 30 migrations and will
+take more, and when it moves, one file here changes and a test says so.
+
+## Running it
+
+```bash
+python3 -m venv venv && ./venv/bin/pip install -r requirements.txt
+
+# once, on CW's database, as an admin:
+psql "$CW_ADMIN_DSN" -v pw="'...'" -f grants.sql
+
+export CW_SOURCE_DSN="postgresql://cw_reader:...@localhost:5432/coal_washery_erp"
+./venv/bin/python extract.py --out cw.sqlite
+```
+
+`--check-only` verifies the schema contract and exits without reading data —
+cheap enough to run after every CW deploy.
+
+## What it does, and deliberately does not
+
+**Full snapshots, not incremental sync.** No CW table carries `updated_at`, and
+CW hard-deletes from 36 call sites with no `deleted_at`. A consumer polling for
+changes would take new rows, miss every correction, and keep deleted rows for
+ever. A snapshot cannot be subtly wrong. At 3,496 rows — single-digit millions
+after years of five washeries — it costs seconds. Revisit when one run stops
+being comfortable, not before.
+
+**Every row is stamped with its company.** A read-only connection sees every
+client in the database and nothing upstream scopes it, so `_company_id` is
+resolved once here rather than re-derived by each product. Consumers filter on
+one column.
+
+Resolving it is not as simple as reading `site_id`. CW scopes by `site_id` *and*
+`group_id`, and some rows carry a NULL `site_id` on purpose — a mobile diesel
+tanker belongs to a company and to no single washery. CW spent releases 1.7.1
+through 1.7.3 on that distinction, the last of them correcting the one before.
+The rule lives in `schema_contract.TABLES[...]["scope"]`, per table, so it is
+declared rather than guessed.
+
+**Columns are allow-listed.** `users.password_hash` and `users.session_token`
+are excluded by name, and `check_drift()` fails when any table gains a column
+the contract does not declare. A deny-list would fail silently: the next
+migration that adds a secret column would export it and nobody would find out.
+`grants.sql` enforces the same thing at the database, where `users` is granted
+column by column and no default privileges are set — so a new CW table is not
+readable until somebody decides it should be.
+
+**It never writes to CW.** Read-only at the role, and the session is opened
+read-only as well. When the trading system needs to write back, that is a
+different credential, a different document, and a different risk.
+
+**The snapshot is atomic.** Built in a temporary file and renamed into place, so
+a consumer never opens a half-written store and a failed run leaves the previous
+one intact.
+
+## Files
+
+| | |
+|---|---|
+| `schema_contract.py` | the only place that knows CW's schema — tables, columns, scoping |
+| `extract.py` | connects, checks drift, snapshots |
+| `grants.sql` | the read-only role, fail-closed by construction |
+| `tests_extract.py` | drift is loud, secrets stay out, scope resolves correctly |
+
+## Tests
+
+```bash
+CW_SOURCE_DSN=... ./venv/bin/python tests_extract.py
+```
+
+They caught two modelling errors in the contract on their first run: a child
+table pointed at a global parent, and the platform superadmin treated as an
+unattributed row rather than a legitimate one. Both were the contract's fault,
+not the extractor's, which is what the attribution check exists to surface.
+
+## When CW changes
+
+`extract.py` refuses to snapshot against a drifted schema. Update
+`schema_contract.py` deliberately — that refusal is the feature. Regenerating
+the contract wholesale from a live schema would defeat it.

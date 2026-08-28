@@ -32,8 +32,16 @@ $$;
 ALTER ROLE cw_reader WITH PASSWORD :pw;
 ALTER ROLE cw_reader SET default_transaction_read_only = on;
 
-GRANT CONNECT ON DATABASE coal_washery_erp TO cw_reader;
-GRANT USAGE   ON SCHEMA public TO cw_reader;
+-- Whatever database psql is connected to. Hardcoding a name here was wrong:
+-- the demo is `coal_washery_demo`, a dev box is `coal_washery_erp`, and a
+-- client instance will be something else again.
+DO $$
+BEGIN
+  EXECUTE format('GRANT CONNECT ON DATABASE %I TO cw_reader', current_database());
+END
+$$;
+
+GRANT USAGE ON SCHEMA public TO cw_reader;
 
 -- Everything the contract reads, except users.
 GRANT SELECT ON

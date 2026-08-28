@@ -24,9 +24,19 @@ python3 -m venv venv && ./venv/bin/pip install -r requirements.txt
 # once, on CW's database, as an admin:
 psql "$CW_ADMIN_DSN" -v pw="'...'" -f grants.sql
 
+# either a DSN...
 export CW_SOURCE_DSN="postgresql://cw_reader:...@localhost:5432/coal_washery_erp"
 ./venv/bin/python extract.py --out cw.sqlite
+
+# ...or the parts separately, which is safer for a password with @ or / in it
+CW_READER_PW='...' ./venv/bin/python extract.py \
+    --host localhost --dbname coal_washery_erp --user cw_reader --out cw.sqlite
 ```
+
+A password containing `@` silently breaks the DSN form — psycopg2 splits on the
+first `@`, so `cw_reader:Cwmis@2026@db` resolves the host as `2026@db` and fails
+with a name-resolution error that never mentions passwords. The DSN form now
+detects that and says so; the discrete form avoids the question.
 
 `--check-only` verifies the schema contract and exits without reading data —
 cheap enough to run after every CW deploy.

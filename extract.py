@@ -100,7 +100,7 @@ def create_table(sq: sqlite3.Connection, table: str, columns: list[str]) -> None
 
 
 def snapshot(source: str, out: Path, verbose: bool = True) -> dict:
-    pg = psycopg2.connect(source)
+    pg = psycopg2.connect(**source) if isinstance(source, dict) else psycopg2.connect(source)
     pg.set_session(readonly=True, autocommit=True)
     cur = pg.cursor()
 
@@ -172,7 +172,27 @@ def _plain(v):
     return str(v)
 
 
-def _redact(dsn: str) -> str:
+def _warn_unencoded_at(dsn: str) -> None:
+    """
+    A password with a bare '@' makes the DSN mean something else entirely.
+
+    psycopg2 splits on the first '@', so cw_reader:Cwmis@2026@db resolves the
+    host as "2026@db" and fails with a name-resolution error that says nothing
+    about passwords. Caught here so the message names the real cause.
+    """
+    if "://" not in dsn:
+        return
+    creds = dsn.split("://", 1)[1]
+    if creds.count("@") > 1:
+        sys.exit(
+            "the DSN has more than one '@' — a password containing '@' must be\n"
+            "percent-encoded (@ becomes %40), or pass the parts separately:\n"
+            "  CW_READER_PW=... extract.py --host db --dbname coal_washery_demo --user cw_reader")
+
+
+def _redact(dsn) -> str:
+    if isinstance(dsn, dict):
+        return f"{dsn.get('user')}@{dsn.get('host')}:{dsn.get('port')}/{dsn.get('dbname')}"
     if "@" in dsn and "://" in dsn:
         head, rest = dsn.split("://", 1)
         return f"{head}://***@{rest.split('@', 1)[1]}"
@@ -183,16 +203,32 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="Snapshot Coal Washery for the reporting products")
     ap.add_argument("--source", default=os.environ.get("CW_SOURCE_DSN"),
                     help="read-only DSN for CW's Postgres (or CW_SOURCE_DSN)")
+    # Discrete parts, so a password never has to survive being embedded in a
+    # URL. A password containing '@' silently broke the DSN form: psycopg2
+    # splits on the first '@', so "cw_reader:Cwmis@2026@db" resolved the host
+    # as "2026@db". Percent-encoding fixes it and nobody should have to know
+    # that.
+    ap.add_argument("--host"); ap.add_argument("--port", default="5432")
+    ap.add_argument("--dbname"); ap.add_argument("--user")
     ap.add_argument("--out", default="cw.sqlite", help="snapshot file to write")
     ap.add_argument("--check-only", action="store_true",
                     help="verify the schema contract and exit without reading data")
     a = ap.parse_args()
 
-    if not a.source:
-        sys.exit("no source DSN — pass --source or set CW_SOURCE_DSN")
+    if a.host or a.dbname or a.user:
+        pw = os.environ.get("CW_READER_PW") or os.environ.get("PGPASSWORD")
+        if not pw:
+            sys.exit("set CW_READER_PW (or PGPASSWORD) when using --host/--user")
+        a.source = {"host": a.host or "localhost", "port": a.port,
+                    "dbname": a.dbname, "user": a.user, "password": pw}
+    elif not a.source:
+        sys.exit("no source — pass --source/CW_SOURCE_DSN, or --host/--user with CW_READER_PW")
+    else:
+        _warn_unencoded_at(a.source)
 
     if a.check_only:
-        pg = psycopg2.connect(a.source)
+        pg = (psycopg2.connect(**a.source) if isinstance(a.source, dict)
+              else psycopg2.connect(a.source))
         pg.set_session(readonly=True, autocommit=True)
         cur = pg.cursor()
         findings = contract.check_drift(live_columns(cur))

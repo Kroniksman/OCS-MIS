@@ -2,3 +2,8 @@ venv/
 cw.sqlite
 *.sqlite
 __pycache__/
+snapshot.env
+.cw_reader_pw
+snapshot.log
+.last_run
+cw-*.sqlite

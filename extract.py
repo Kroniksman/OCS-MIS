@@ -210,15 +210,27 @@ def main() -> None:
     # that.
     ap.add_argument("--host"); ap.add_argument("--port", default="5432")
     ap.add_argument("--dbname"); ap.add_argument("--user")
+    # For scheduled runs. An env var passed as -e KEY=VALUE lands in the
+    # process list, where anything on the host can read it for the duration of
+    # the run. A file read from inside the container does not.
+    ap.add_argument("--password-file", help="file containing the password, nothing else")
     ap.add_argument("--out", default="cw.sqlite", help="snapshot file to write")
     ap.add_argument("--check-only", action="store_true",
                     help="verify the schema contract and exit without reading data")
     a = ap.parse_args()
 
     if a.host or a.dbname or a.user:
-        pw = os.environ.get("CW_READER_PW") or os.environ.get("PGPASSWORD")
+        pw = None
+        if a.password_file:
+            pf = Path(a.password_file)
+            if not pf.exists():
+                sys.exit(f"no password file at {pf}")
+            pw = pf.read_text(encoding="utf-8").strip()
+            if not pw:
+                sys.exit(f"{pf} is empty")
+        pw = pw or os.environ.get("CW_READER_PW") or os.environ.get("PGPASSWORD")
         if not pw:
-            sys.exit("set CW_READER_PW (or PGPASSWORD) when using --host/--user")
+            sys.exit("no password — use --password-file, or set CW_READER_PW / PGPASSWORD")
         a.source = {"host": a.host or "localhost", "port": a.port,
                     "dbname": a.dbname, "user": a.user, "password": pw}
     elif not a.source:

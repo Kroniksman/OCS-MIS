@@ -79,6 +79,44 @@ docker compose -p coal-washery-demo --env-file .env \
 Add `--check-only` to step 3 to verify the contract without reading data — cheap
 enough to run after every CW deploy.
 
+## Running it nightly
+
+```bash
+cd /opt/coal-washery-extract
+cp snapshot.env.example snapshot.env          # paths for this installation
+printf 'the-password\n' > .cw_reader_pw && chmod 600 .cw_reader_pw
+./snapshot.sh                                 # prove it works by hand first
+./snapshot.sh --status
+```
+
+Then one line in root's crontab (`crontab -e`):
+
+```
+17 2 * * *  /opt/coal-washery-extract/snapshot.sh >/dev/null 2>&1
+```
+
+02:17 rather than 02:00 — a box with other work on it has enough jobs starting
+on the hour.
+
+**The password is in a file, not the command.** `-e CW_READER_PW=...` puts the
+secret in the process list, where anything on the host can read it while the
+run lasts; this box carries other people's sites. `--password-file` is read
+inside the container instead.
+
+**`--status` is the point of the whole thing.** A snapshot that quietly stops
+running is worse than one that fails loudly: the MIS keeps answering, with
+figures that are weeks old and look current. So status reports the *age of the
+snapshot*, not merely the last exit code, and exits non-zero once it passes 36
+hours — a monitor can watch it without parsing text.
+
+    exit 0   fresh, last run succeeded
+    exit 1   never run, or the snapshot file is missing
+    exit 2   stale — more than 36h since the last good one
+
+A dated copy is kept for `KEEP_DAYS` (7 by default, ~600 KB each), so a snapshot
+taken during a bad migration can be stepped back from rather than only
+regretted.
+
 ## What it does, and deliberately does not
 
 **Full snapshots, not incremental sync.** No CW table carries `updated_at`, and

@@ -1,6 +1,11 @@
 -- A read-only role for the extractor, on Coal Washery's Postgres.
 --
---   psql "$CW_ADMIN_DSN" -v pw="'a-strong-password'" -f grants.sql
+--   CW_READER_PW='a-strong-password' psql "$CW_ADMIN_DSN" -f grants.sql
+--
+-- The password comes from the environment, not a -v flag. The flag form needed
+-- nested quotes (-v pw="'...'"), and a terminal that helpfully converts those
+-- to smart quotes produces a syntax error halfway through — after the role has
+-- been created but before it has a password or any grants.
 --
 -- Two properties matter more than the grants themselves, and both are
 -- fail-closed by default in Postgres. Do not undo them:
@@ -21,6 +26,14 @@
 
 \set ON_ERROR_STOP on
 
+\getenv pw CW_READER_PW
+\if :{?pw}
+\else
+  \echo '  CW_READER_PW is not set. Re-run as:'
+  \echo '    CW_READER_PW=your-password psql ... -f grants.sql'
+  \quit
+\endif
+
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'cw_reader') THEN
@@ -29,7 +42,7 @@ BEGIN
 END
 $$;
 
-ALTER ROLE cw_reader WITH PASSWORD :pw;
+ALTER ROLE cw_reader WITH PASSWORD :'pw';
 ALTER ROLE cw_reader SET default_transaction_read_only = on;
 
 -- Whatever database psql is connected to. Hardcoding a name here was wrong:
